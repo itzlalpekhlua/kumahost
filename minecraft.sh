@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 MC_PORT="25565"
-MC_MEMORY_GB="4"
+MC_MEMORY_GB="auto"
 MC_VERSION="latest"
 MC_USER="minecraft"
 MC_GROUP="minecraft"
@@ -12,6 +12,8 @@ MC_JAR_NAME="server.jar"
 MC_INFO_FILE="/etc/minecraft-server-info"
 MC_BASH_MARKER_START="# >>> kumahost-minecraft-info >>>"
 MC_BASH_MARKER_END="# <<< kumahost-minecraft-info <<<"
+MC_JAVA_XMS="512M"
+MC_JAVA_XMX="1024M"
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*"
@@ -38,6 +40,76 @@ detect_pkg_manager() {
     else
         fail "No supported package manager found (apt, dnf, yum)."
     fi
+}
+
+detect_memory_limit_mb() {
+    local host_mb cgroup_v2_mb cgroup_v1_mb limit_mb
+
+    host_mb="$(awk '/MemTotal:/ {print int($2/1024)}' /proc/meminfo 2>/dev/null || echo 0)"
+    cgroup_v2_mb=0
+    cgroup_v1_mb=0
+
+    if [[ -f /sys/fs/cgroup/memory.max ]]; then
+        local v2
+        v2="$(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo max)"
+        if [[ "$v2" != "max" ]]; then
+            cgroup_v2_mb=$(( v2 / 1024 / 1024 ))
+        fi
+    fi
+
+    if [[ -f /sys/fs/cgroup/memory/memory.limit_in_bytes ]]; then
+        local v1
+        v1="$(cat /sys/fs/cgroup/memory/memory.limit_in_bytes 2>/dev/null || echo 0)"
+        if [[ "$v1" -gt 0 ]]; then
+            cgroup_v1_mb=$(( v1 / 1024 / 1024 ))
+        fi
+    fi
+
+    limit_mb="$host_mb"
+    for candidate in "$cgroup_v2_mb" "$cgroup_v1_mb"; do
+        if [[ "$candidate" -gt 0 && "$candidate" -lt "$limit_mb" ]]; then
+            limit_mb="$candidate"
+        fi
+    done
+
+    if [[ "$limit_mb" -lt 768 ]]; then
+        limit_mb=768
+    fi
+
+    echo "$limit_mb"
+}
+
+calculate_java_memory() {
+    local total_mb xmx_mb xms_mb
+    total_mb="$(detect_memory_limit_mb)"
+
+    if [[ "$MC_MEMORY_GB" == "auto" || -z "$MC_MEMORY_GB" ]]; then
+        # Keep memory headroom for OS and background processes.
+        xmx_mb=$(( total_mb * 70 / 100 ))
+    else
+        xmx_mb=$(( MC_MEMORY_GB * 1024 ))
+    fi
+
+    if [[ "$xmx_mb" -lt 768 ]]; then
+        xmx_mb=768
+    fi
+    if [[ "$xmx_mb" -ge "$total_mb" ]]; then
+        xmx_mb=$(( total_mb - 128 ))
+    fi
+    if [[ "$xmx_mb" -lt 768 ]]; then
+        xmx_mb=768
+    fi
+
+    xms_mb=$(( xmx_mb / 2 ))
+    if [[ "$xms_mb" -lt 512 ]]; then
+        xms_mb=512
+    fi
+    if [[ "$xms_mb" -gt "$xmx_mb" ]]; then
+        xms_mb="$xmx_mb"
+    fi
+
+    MC_JAVA_XMS="${xms_mb}M"
+    MC_JAVA_XMX="${xmx_mb}M"
 }
 
 install_packages_apt() {
@@ -198,7 +270,7 @@ EOF
     cat > "${MC_DIR}/start.sh" <<EOF
 #!/usr/bin/env bash
 cd "${MC_DIR}"
-exec java -Xms${MC_MEMORY_GB}G -Xmx${MC_MEMORY_GB}G -jar ${MC_JAR_NAME} nogui
+exec java -Xms${MC_JAVA_XMS} -Xmx${MC_JAVA_XMX} -jar ${MC_JAR_NAME} nogui
 EOF
 
     chmod +x "${MC_DIR}/start.sh"
@@ -262,12 +334,25 @@ detect_public_ip() {
 set_login_banner() {
     local ip
     ip="$(detect_public_ip)"
+    local paper_version="unknown"
+    local paper_build="unknown"
+
+    if [[ -f "${MC_DIR}/.kumahost-paper-version" ]]; then
+        # shellcheck disable=SC1090
+        . "${MC_DIR}/.kumahost-paper-version"
+        paper_version="${PAPER_VERSION:-unknown}"
+        paper_build="${PAPER_BUILD:-unknown}"
+    fi
 
     cat > "$MC_INFO_FILE" <<EOF
 MC_SERVER_IP=${ip}
 MC_SERVER_PORT=${MC_PORT}
 MC_SERVER_MEMORY_GB=${MC_MEMORY_GB}
+MC_SERVER_JAVA_XMS=${MC_JAVA_XMS}
+MC_SERVER_JAVA_XMX=${MC_JAVA_XMX}
 MC_SERVER_DIR=${MC_DIR}
+MC_PAPER_VERSION=${paper_version}
+MC_PAPER_BUILD=${paper_build}
 EOF
 
     local bashrc="/etc/bash.bashrc"
@@ -289,6 +374,9 @@ if [ -n "$PS1" ] && [ -f /etc/minecraft-server-info ]; then
     printf '\n\033[1;32mKumaHost Minecraft Server Ready\033[0m\n'
     printf 'IP: \033[1;36m%s\033[0m\n' "${MC_SERVER_IP:-unknown}"
     printf 'Port: \033[1;36m%s\033[0m\n' "${MC_SERVER_PORT:-25565}"
+    printf 'Java RAM: \033[1;35mXms=%s Xmx=%s\033[0m\n' "${MC_SERVER_JAVA_XMS:-512M}" "${MC_SERVER_JAVA_XMX:-1024M}"
+    printf 'Paper: \033[1;35m%s (build %s)\033[0m\n' "${MC_PAPER_VERSION:-unknown}" "${MC_PAPER_BUILD:-unknown}"
+    printf 'Directory: \033[1;34m%s\033[0m\n' "${MC_SERVER_DIR:-/opt/minecraft}"
     printf 'Connect: \033[1;33m%s:%s\033[0m\n\n' "${MC_SERVER_IP:-unknown}" "${MC_SERVER_PORT:-25565}"
 fi
 # <<< kumahost-minecraft-info <<<
@@ -300,6 +388,7 @@ print_summary() {
     ip="$(detect_public_ip)"
     log "Installation completed."
     log "Minecraft service: ${MC_SERVICE_NAME}.service"
+    log "Java memory: Xms=${MC_JAVA_XMS}, Xmx=${MC_JAVA_XMX}"
     log "Server directory: ${MC_DIR}"
     log "Connect using: ${ip}:${MC_PORT}"
     log "Check status: systemctl status ${MC_SERVICE_NAME}"
@@ -310,6 +399,7 @@ main() {
     require_root
     ensure_java_and_tools
     setup_user_and_dirs
+    calculate_java_memory
     download_paper_server
     write_minecraft_files
     write_systemd_service
