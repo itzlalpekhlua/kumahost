@@ -22,6 +22,11 @@ FIVEM_DB_USER=""
 FIVEM_DB_PASSWORD=""
 FIVEM_DB_NAME=""
 FIVEM_DB_CONN=""
+DOWNLOAD_TIMEOUT_SECONDS="${DOWNLOAD_TIMEOUT_SECONDS:-20}"
+DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
+FIVEM_TMUX_ENABLED="${FIVEM_TMUX_ENABLED:-1}"
+FIVEM_TMUX_SESSION="${FIVEM_TMUX_SESSION:-kumahost-fivem-install}"
+FIVEM_IN_TMUX="${FIVEM_IN_TMUX:-0}"
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*"
@@ -38,6 +43,52 @@ require_root() {
     fi
 }
 
+run_in_tmux_if_needed() {
+    if [[ "$FIVEM_TMUX_ENABLED" != "1" ]]; then
+        return 0
+    fi
+    if [[ -n "${TMUX:-}" || "$FIVEM_IN_TMUX" == "1" ]]; then
+        return 0
+    fi
+    if ! command -v tmux >/dev/null 2>&1; then
+        log "tmux not found; continuing without tmux session."
+        return 0
+    fi
+
+    local script_path="$0"
+    if [[ "$script_path" != /* ]]; then
+        script_path="$(pwd)/$script_path"
+    fi
+
+    local tmux_cmd
+    printf -v tmux_cmd \
+        'FIVEM_IN_TMUX=1 SETUP_URL=%q FIVEM_VERSION=%q FIVEM_ENABLE_CRONTAB=%q FIVEM_KILL_PORT=%q FIVEM_DELETE_DIR=%q FIVEM_NO_TXADMIN=%q FIVEM_DIR=%q FIVEM_INFO_FILE=%q DOWNLOAD_TIMEOUT_SECONDS=%q DOWNLOAD_RETRIES=%q FIVEM_TMUX_ENABLED=1 FIVEM_TMUX_SESSION=%q bash %q' \
+        "$SETUP_URL" \
+        "$FIVEM_VERSION" \
+        "$FIVEM_ENABLE_CRONTAB" \
+        "$FIVEM_KILL_PORT" \
+        "$FIVEM_DELETE_DIR" \
+        "$FIVEM_NO_TXADMIN" \
+        "$FIVEM_DIR" \
+        "$FIVEM_INFO_FILE" \
+        "$DOWNLOAD_TIMEOUT_SECONDS" \
+        "$DOWNLOAD_RETRIES" \
+        "$FIVEM_TMUX_SESSION" \
+        "$script_path"
+
+    if tmux has-session -t "$FIVEM_TMUX_SESSION" 2>/dev/null; then
+        log "A tmux install session already exists: $FIVEM_TMUX_SESSION"
+        log "Attach with: tmux attach -t $FIVEM_TMUX_SESSION"
+        exit 0
+    fi
+
+    tmux new-session -d -s "$FIVEM_TMUX_SESSION" "$tmux_cmd"
+    log "Installer started in tmux session: $FIVEM_TMUX_SESSION"
+    log "Attach with: tmux attach -t $FIVEM_TMUX_SESSION"
+    log "To run in foreground next time: FIVEM_TMUX_ENABLED=0 bash $script_path"
+    exit 0
+}
+
 detect_public_ip() {
     local ip
     ip="$(curl -4fsS --max-time 4 https://api.ipify.org || true)"
@@ -50,6 +101,30 @@ detect_public_ip() {
     printf '%s' "${ip:-unknown}"
 }
 
+download_setup_script() {
+    local out_file="$1"
+    local attempts=0
+
+    while (( attempts < DOWNLOAD_RETRIES )); do
+        attempts=$((attempts + 1))
+        if curl -fsSL \
+            --connect-timeout "$DOWNLOAD_TIMEOUT_SECONDS" \
+            --max-time $((DOWNLOAD_TIMEOUT_SECONDS * 3)) \
+            "$SETUP_URL" \
+            -o "$out_file"; then
+            if head -n 1 "$out_file" | grep -Eq '^#!/'; then
+                return 0
+            fi
+            log "Downloaded file from $SETUP_URL but it does not look executable."
+        else
+            log "Download attempt ${attempts}/${DOWNLOAD_RETRIES} failed."
+        fi
+        sleep 2
+    done
+
+    return 1
+}
+
 write_info_file() {
     local ip txadmin_enabled
     ip="$(detect_public_ip)"
@@ -58,13 +133,14 @@ write_info_file() {
         txadmin_enabled="no"
     fi
 
+    umask 077
     cat > "$FIVEM_INFO_FILE" <<EOF
 FIVEM_SERVER_IP=${ip}
 FIVEM_SERVER_DIR=${FIVEM_DIR}
 FIVEM_TXADMIN_PORT=40120
 FIVEM_GAME_PORT=30120
 FIVEM_TXADMIN_ENABLED=${txadmin_enabled}
-FIVEM_TXADMIN_URL=${FIVEM_TXADMIN_URL:-http://${ip}:40120}
+FIVEM_TXADMIN_URL=${FIVEM_TXADMIN_URL:-}
 FIVEM_PIN=${FIVEM_PIN:-unknown}
 FIVEM_PIN_NOTE=PIN is short-lived and may expire quickly after install.
 FIVEM_SERVER_DATA_PATH=${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}
@@ -73,6 +149,7 @@ FIVEM_DB_PASSWORD=${FIVEM_DB_PASSWORD:-}
 FIVEM_DB_NAME=${FIVEM_DB_NAME:-}
 FIVEM_DB_CONN=${FIVEM_DB_CONN:-}
 EOF
+    chmod 600 "$FIVEM_INFO_FILE"
 }
 
 set_login_banner() {
@@ -92,9 +169,14 @@ set_login_banner() {
 # >>> kumahost-fivem-info >>>
 if [ -n "$PS1" ] && [ -f /etc/fivem-server-info ]; then
     . /etc/fivem-server-info
+    if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
+        _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
+    else
+        _fivem_txadmin_display="disabled"
+    fi
     printf '\n\033[1;32mKumaHost FiveM Server Ready\033[0m\n'
     printf 'IP: \033[1;36m%s\033[0m\n' "${FIVEM_SERVER_IP:-unknown}"
-    printf 'txAdmin: \033[1;33m%s\033[0m\n' "${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
+    printf 'txAdmin: \033[1;33m%s\033[0m\n' "${_fivem_txadmin_display}"
     printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
     printf 'Note: \033[0;37m%s\033[0m\n' "${FIVEM_PIN_NOTE:-PIN may expire quickly}"
     printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
@@ -145,12 +227,16 @@ extract_runtime_details() {
         FIVEM_DB_NAME="$(printf '%s\n' "$mysql_block" | sed -nE 's/^[[:space:]]*Database name:[[:space:]]*(.+)$/\1/p' | head -n1)"
         FIVEM_DB_CONN="$(printf '%s\n' "$mysql_block" | sed -nE 's/^[[:space:]]*set mysql_connection_string[[:space:]]+"(.*)".*$/\1/p' | head -n1)"
     fi
+
+    FIVEM_TXADMIN_URL="${FIVEM_TXADMIN_URL//$'\r'/}"
+    FIVEM_PIN="${FIVEM_PIN//$'\r'/}"
+    FIVEM_SERVER_DATA_PATH="${FIVEM_SERVER_DATA_PATH//$'\r'/}"
 }
 
 print_summary() {
     local ip txadmin_url mode
     ip="$(detect_public_ip)"
-    txadmin_url="${FIVEM_TXADMIN_URL:-http://${ip}:40120}"
+    txadmin_url="${FIVEM_TXADMIN_URL:-disabled}"
     mode="txAdmin deployment"
     if [[ "$FIVEM_NO_TXADMIN" == "1" ]]; then
         mode="cfx-server-data mode"
@@ -177,6 +263,7 @@ print_summary() {
     log "  Stop: ${FIVEM_DIR}/stop.sh"
     log "  Attach: ${FIVEM_DIR}/attach.sh"
     log "Screen session: screen -xS fivem"
+    log "Install session: tmux attach -t ${FIVEM_TMUX_SESSION}"
 }
 
 main() {
@@ -184,6 +271,7 @@ main() {
 
     command -v curl >/dev/null 2>&1 || fail "curl is required."
     command -v bash >/dev/null 2>&1 || fail "bash is required."
+    run_in_tmux_if_needed
 
     local args=(
         --non-interactive
@@ -211,7 +299,9 @@ main() {
     tmp="$(mktemp /tmp/fivem-setup.XXXXXX.sh)"
     trap 'rm -f "$tmp"' EXIT
 
-    curl -fsSL "$SETUP_URL" -o "$tmp"
+    if ! download_setup_script "$tmp"; then
+        fail "Failed to download setup script from $SETUP_URL after ${DOWNLOAD_RETRIES} attempts."
+    fi
     chmod +x "$tmp"
 
     mkdir -p "$(dirname "$FIVEM_INSTALL_LOG")"
