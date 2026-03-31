@@ -241,36 +241,36 @@ write_info_file() {
     fi
 
     umask 077
-    cat > "$FIVEM_INFO_FILE" <<EOF
-FIVEM_SERVER_IP=${ip}
-FIVEM_SERVER_DIR=${FIVEM_DIR}
-FIVEM_TXADMIN_PORT=40120
-FIVEM_GAME_PORT=30120
-FIVEM_TXADMIN_ENABLED=${txadmin_enabled}
-FIVEM_TXADMIN_URL=${FIVEM_TXADMIN_URL:-}
-FIVEM_PIN=${FIVEM_PIN:-unknown}
-FIVEM_PIN_NOTE=PIN is short-lived and may expire quickly after install.
-FIVEM_SERVER_DATA_PATH=${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}
-FIVEM_DB_USER=${FIVEM_DB_USER:-}
-FIVEM_DB_PASSWORD=${FIVEM_DB_PASSWORD:-}
-FIVEM_DB_NAME=${FIVEM_DB_NAME:-}
-FIVEM_DB_CONN=${FIVEM_DB_CONN:-}
-EOF
+    {
+        printf 'FIVEM_SERVER_IP=%q\n' "$ip"
+        printf 'FIVEM_SERVER_DIR=%q\n' "$FIVEM_DIR"
+        printf 'FIVEM_TXADMIN_PORT=%q\n' "40120"
+        printf 'FIVEM_GAME_PORT=%q\n' "30120"
+        printf 'FIVEM_TXADMIN_ENABLED=%q\n' "$txadmin_enabled"
+        printf 'FIVEM_TXADMIN_URL=%q\n' "${FIVEM_TXADMIN_URL:-}"
+        printf 'FIVEM_PIN=%q\n' "${FIVEM_PIN:-unknown}"
+        printf 'FIVEM_PIN_NOTE=%q\n' "PIN is short-lived and may expire quickly after install."
+        printf 'FIVEM_SERVER_DATA_PATH=%q\n' "${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
+        printf 'FIVEM_DB_USER=%q\n' "${FIVEM_DB_USER:-}"
+        printf 'FIVEM_DB_PASSWORD=%q\n' "${FIVEM_DB_PASSWORD:-}"
+        printf 'FIVEM_DB_NAME=%q\n' "${FIVEM_DB_NAME:-}"
+        printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+    } > "$FIVEM_INFO_FILE"
     chmod 600 "$FIVEM_INFO_FILE"
 
     # Public banner data (no DB secrets), readable by normal users.
     umask 022
-    cat > "$FIVEM_INFO_PUBLIC_FILE" <<EOF
-FIVEM_SERVER_IP=${ip}
-FIVEM_SERVER_DIR=${FIVEM_DIR}
-FIVEM_TXADMIN_PORT=40120
-FIVEM_GAME_PORT=30120
-FIVEM_TXADMIN_ENABLED=${txadmin_enabled}
-FIVEM_TXADMIN_URL=${FIVEM_TXADMIN_URL:-}
-FIVEM_PIN=${FIVEM_PIN:-unknown}
-FIVEM_PIN_NOTE=PIN is short-lived and may expire quickly after install.
-FIVEM_SERVER_DATA_PATH=${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}
-EOF
+    {
+        printf 'FIVEM_SERVER_IP=%q\n' "$ip"
+        printf 'FIVEM_SERVER_DIR=%q\n' "$FIVEM_DIR"
+        printf 'FIVEM_TXADMIN_PORT=%q\n' "40120"
+        printf 'FIVEM_GAME_PORT=%q\n' "30120"
+        printf 'FIVEM_TXADMIN_ENABLED=%q\n' "$txadmin_enabled"
+        printf 'FIVEM_TXADMIN_URL=%q\n' "${FIVEM_TXADMIN_URL:-}"
+        printf 'FIVEM_PIN=%q\n' "${FIVEM_PIN:-unknown}"
+        printf 'FIVEM_PIN_NOTE=%q\n' "PIN is short-lived and may expire quickly after install."
+        printf 'FIVEM_SERVER_DATA_PATH=%q\n' "${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
+    } > "$FIVEM_INFO_PUBLIC_FILE"
     chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
 }
 
