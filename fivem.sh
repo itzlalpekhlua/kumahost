@@ -12,6 +12,7 @@ FIVEM_DELETE_DIR="${FIVEM_DELETE_DIR:-0}"
 FIVEM_NO_TXADMIN="${FIVEM_NO_TXADMIN:-0}"
 FIVEM_DIR="${FIVEM_DIR:-/home/FiveM}"
 FIVEM_INFO_FILE="${FIVEM_INFO_FILE:-/etc/fivem-server-info}"
+FIVEM_INFO_PUBLIC_FILE="${FIVEM_INFO_PUBLIC_FILE:-/etc/fivem-server-info-public}"
 FIVEM_BASH_MARKER_START="# >>> kumahost-fivem-info >>>"
 FIVEM_BASH_MARKER_END="# <<< kumahost-fivem-info <<<"
 FIVEM_INSTALL_LOG="/var/log/kumahost-fivem-install.log"
@@ -30,6 +31,7 @@ FIVEM_IN_TMUX="${FIVEM_IN_TMUX:-0}"
 FIVEM_TMUX_KEEP_OPEN="${FIVEM_TMUX_KEEP_OPEN:-1}"
 FIVEM_QGA_AUTO_DETECT="${FIVEM_QGA_AUTO_DETECT:-1}"
 FIVEM_STAGED_SCRIPT_PATH="${FIVEM_STAGED_SCRIPT_PATH:-/tmp/kumahost-fivem-auto-installer.sh}"
+FIVEM_TERM_DEFAULT="${FIVEM_TERM_DEFAULT:-xterm-256color}"
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*"
@@ -255,6 +257,21 @@ FIVEM_DB_NAME=${FIVEM_DB_NAME:-}
 FIVEM_DB_CONN=${FIVEM_DB_CONN:-}
 EOF
     chmod 600 "$FIVEM_INFO_FILE"
+
+    # Public banner data (no DB secrets), readable by normal users.
+    umask 022
+    cat > "$FIVEM_INFO_PUBLIC_FILE" <<EOF
+FIVEM_SERVER_IP=${ip}
+FIVEM_SERVER_DIR=${FIVEM_DIR}
+FIVEM_TXADMIN_PORT=40120
+FIVEM_GAME_PORT=30120
+FIVEM_TXADMIN_ENABLED=${txadmin_enabled}
+FIVEM_TXADMIN_URL=${FIVEM_TXADMIN_URL:-}
+FIVEM_PIN=${FIVEM_PIN:-unknown}
+FIVEM_PIN_NOTE=PIN is short-lived and may expire quickly after install.
+FIVEM_SERVER_DATA_PATH=${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}
+EOF
+    chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
 }
 
 set_login_banner() {
@@ -272,8 +289,8 @@ set_login_banner() {
     cat >> "$bashrc" <<'EOF'
 
 # >>> kumahost-fivem-info >>>
-if [ -n "$PS1" ] && [ -f /etc/fivem-server-info ]; then
-    . /etc/fivem-server-info
+if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
+    . /etc/fivem-server-info-public
     if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
         _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
     else
@@ -287,14 +304,6 @@ if [ -n "$PS1" ] && [ -f /etc/fivem-server-info ]; then
     printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
     printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
     printf 'Server Data: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DATA_PATH:-/home/FiveM/server-data}"
-    if [ -n "${FIVEM_DB_USER:-}" ] || [ -n "${FIVEM_DB_NAME:-}" ]; then
-        printf 'DB User: \033[1;36m%s\033[0m\n' "${FIVEM_DB_USER:-unknown}"
-        printf 'DB Password: \033[1;31m%s\033[0m\n' "${FIVEM_DB_PASSWORD:-unknown}"
-        printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
-        if [ -n "${FIVEM_DB_CONN:-}" ]; then
-            printf 'DB Conn: \033[1;33m%s\033[0m\n' "${FIVEM_DB_CONN}"
-        fi
-    fi
     printf 'Scripts: \033[1;35mstart.sh stop.sh attach.sh\033[0m\n\n'
 fi
 # <<< kumahost-fivem-info <<<
@@ -376,6 +385,10 @@ main() {
 
     command -v curl >/dev/null 2>&1 || fail "curl is required."
     command -v bash >/dev/null 2>&1 || fail "bash is required."
+    if [[ -z "${TERM:-}" || "${TERM:-}" == "dumb" ]]; then
+        export TERM="$FIVEM_TERM_DEFAULT"
+        log "TERM was missing/dumb; set TERM=${TERM} for non-interactive installer compatibility."
+    fi
     ensure_tmux_installed
     run_in_tmux_if_needed
 
