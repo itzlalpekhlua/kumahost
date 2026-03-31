@@ -291,6 +291,9 @@ set_login_banner() {
 # >>> kumahost-fivem-info >>>
 if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
     . /etc/fivem-server-info-public
+    if [ -r /etc/fivem-server-info ]; then
+        . /etc/fivem-server-info
+    fi
     if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
         _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
     else
@@ -304,6 +307,12 @@ if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
     printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
     printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
     printf 'Server Data: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DATA_PATH:-/home/FiveM/server-data}"
+    if [ -n "${FIVEM_DB_USER:-}" ] || [ -n "${FIVEM_DB_NAME:-}" ] || [ -n "${FIVEM_DB_CONN:-}" ]; then
+        printf 'DB User: \033[1;36m%s\033[0m\n' "${FIVEM_DB_USER:-unknown}"
+        printf 'DB Password: \033[1;31m%s\033[0m\n' "${FIVEM_DB_PASSWORD:-unknown}"
+        printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
+        printf 'DB Conn: \033[1;33m%s\033[0m\n' "${FIVEM_DB_CONN:-unknown}"
+    fi
     printf 'Scripts: \033[1;35mstart.sh stop.sh attach.sh\033[0m\n\n'
 fi
 # <<< kumahost-fivem-info <<<
@@ -347,6 +356,17 @@ extract_runtime_details() {
     FIVEM_SERVER_DATA_PATH="${FIVEM_SERVER_DATA_PATH//$'\r'/}"
 }
 
+populate_db_fields_from_conn() {
+    local conn="${FIVEM_DB_CONN:-}"
+    [[ -n "$conn" ]] || return 0
+
+    if [[ "$conn" =~ ^mysql://([^:]+):([^@]+)@([^/:?]+)(:([0-9]+))?/([^?]+) ]]; then
+        FIVEM_DB_USER="${FIVEM_DB_USER:-${BASH_REMATCH[1]}}"
+        FIVEM_DB_PASSWORD="${FIVEM_DB_PASSWORD:-${BASH_REMATCH[2]}}"
+        FIVEM_DB_NAME="${FIVEM_DB_NAME:-${BASH_REMATCH[6]}}"
+    fi
+}
+
 print_summary() {
     local ip txadmin_url mode
     ip="$(detect_public_ip)"
@@ -363,7 +383,7 @@ print_summary() {
     log "PIN: ${FIVEM_PIN:-unknown}"
     log "Game endpoint: ${ip}:30120 (TCP/UDP)"
     log "Server data path: ${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
-    if [[ -n "${FIVEM_DB_USER:-}" || -n "${FIVEM_DB_NAME:-}" ]]; then
+    if [[ -n "${FIVEM_DB_USER:-}" || -n "${FIVEM_DB_NAME:-}" || -n "${FIVEM_DB_CONN:-}" ]]; then
         log "Database credentials detected:"
         log "  User: ${FIVEM_DB_USER:-unknown}"
         log "  Password: ${FIVEM_DB_PASSWORD:-unknown}"
@@ -371,6 +391,8 @@ print_summary() {
         if [[ -n "${FIVEM_DB_CONN:-}" ]]; then
             log "  Connection: ${FIVEM_DB_CONN}"
         fi
+    else
+        log "No MySQL connection detected from installer output."
     fi
     log "Helper scripts:"
     log "  Start: ${FIVEM_DIR}/start.sh"
@@ -428,6 +450,7 @@ main() {
     bash "$tmp" "${args[@]}" 2>&1 | tee -a "$FIVEM_INSTALL_LOG"
 
     extract_runtime_details "$FIVEM_INSTALL_LOG"
+    populate_db_fields_from_conn
 
     write_info_file
     set_login_banner
