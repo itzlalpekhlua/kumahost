@@ -43,6 +43,34 @@ require_root() {
     fi
 }
 
+ensure_tmux_installed() {
+    if command -v tmux >/dev/null 2>&1; then
+        return 0
+    fi
+
+    log "tmux not found; attempting automatic install..."
+
+    if command -v apt-get >/dev/null 2>&1; then
+        export DEBIAN_FRONTEND=noninteractive
+        apt-get update -y
+        apt-get install -y tmux
+    elif command -v dnf >/dev/null 2>&1; then
+        dnf install -y tmux
+    elif command -v yum >/dev/null 2>&1; then
+        yum install -y tmux
+    elif command -v pacman >/dev/null 2>&1; then
+        pacman -Sy --noconfirm tmux
+    elif command -v zypper >/dev/null 2>&1; then
+        zypper --non-interactive install tmux
+    else
+        fail "tmux is required, and no supported package manager was found (apt/dnf/yum/pacman/zypper)."
+    fi
+
+    if ! command -v tmux >/dev/null 2>&1; then
+        fail "tmux installation failed."
+    fi
+}
+
 run_in_tmux_if_needed() {
     if [[ "$FIVEM_TMUX_ENABLED" != "1" ]]; then
         return 0
@@ -50,10 +78,8 @@ run_in_tmux_if_needed() {
     if [[ -n "${TMUX:-}" || "$FIVEM_IN_TMUX" == "1" ]]; then
         return 0
     fi
-    if ! command -v tmux >/dev/null 2>&1; then
-        log "tmux not found; continuing without tmux session."
-        return 0
-    fi
+
+    ensure_tmux_installed
 
     local script_path="$0"
     if [[ "$script_path" != /* ]]; then
