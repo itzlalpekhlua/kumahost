@@ -23,6 +23,9 @@ FIVEM_DB_USER=""
 FIVEM_DB_PASSWORD=""
 FIVEM_DB_NAME=""
 FIVEM_DB_CONN=""
+FIVEM_DB_HOST="${FIVEM_DB_HOST:-127.0.0.1}"
+FIVEM_DB_PORT="${FIVEM_DB_PORT:-3306}"
+FIVEM_MYSQL_AUTO_SETUP="${FIVEM_MYSQL_AUTO_SETUP:-1}"
 DOWNLOAD_TIMEOUT_SECONDS="${DOWNLOAD_TIMEOUT_SECONDS:-20}"
 DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
 FIVEM_TMUX_ENABLED="${FIVEM_TMUX_ENABLED:-1}"
@@ -80,6 +83,52 @@ ensure_tmux_installed() {
     if ! command -v tmux >/dev/null 2>&1; then
         fail "tmux installation failed."
     fi
+}
+
+ensure_mysql_installed_and_running() {
+    if [[ "$FIVEM_MYSQL_AUTO_SETUP" != "1" ]]; then
+        return 0
+    fi
+
+    if ! command -v mysql >/dev/null 2>&1 && ! command -v mariadb >/dev/null 2>&1; then
+        log "MySQL/MariaDB client not found; attempting installation..."
+        if command -v apt-get >/dev/null 2>&1; then
+            export DEBIAN_FRONTEND=noninteractive
+            apt-get update
+            apt-get install -y mariadb-server mariadb-client
+        elif command -v dnf >/dev/null 2>&1; then
+            dnf install -y mariadb-server mariadb
+        elif command -v yum >/dev/null 2>&1; then
+            yum install -y mariadb-server mariadb
+        elif command -v pacman >/dev/null 2>&1; then
+            pacman -Sy --noconfirm mariadb
+        elif command -v zypper >/dev/null 2>&1; then
+            zypper --non-interactive install mariadb mariadb-client
+        else
+            fail "No supported package manager found for MariaDB/MySQL install."
+        fi
+    fi
+
+    if command -v systemctl >/dev/null 2>&1; then
+        if systemctl list-unit-files | grep -q '^mariadb\.service'; then
+            systemctl enable --now mariadb || true
+        elif systemctl list-unit-files | grep -q '^mysql\.service'; then
+            systemctl enable --now mysql || true
+        fi
+    fi
+}
+
+mysql_exec() {
+    local q="$1"
+    if command -v mariadb >/dev/null 2>&1; then
+        mariadb -N -B -e "$q"
+    else
+        mysql -N -B -e "$q"
+    fi
+}
+
+random_token() {
+    tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-24}"
 }
 
 is_qga_context() {
@@ -254,6 +303,8 @@ write_info_file() {
         printf 'FIVEM_DB_USER=%q\n' "${FIVEM_DB_USER:-}"
         printf 'FIVEM_DB_PASSWORD=%q\n' "${FIVEM_DB_PASSWORD:-}"
         printf 'FIVEM_DB_NAME=%q\n' "${FIVEM_DB_NAME:-}"
+        printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
+        printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
         printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
     } > "$FIVEM_INFO_FILE"
     chmod 600 "$FIVEM_INFO_FILE"
@@ -270,6 +321,13 @@ write_info_file() {
         printf 'FIVEM_PIN=%q\n' "${FIVEM_PIN:-unknown}"
         printf 'FIVEM_PIN_NOTE=%q\n' "PIN is short-lived and may expire quickly after install."
         printf 'FIVEM_SERVER_DATA_PATH=%q\n' "${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
+        # Intentionally included in public banner file because panel owner requested it.
+        printf 'FIVEM_DB_USER=%q\n' "${FIVEM_DB_USER:-}"
+        printf 'FIVEM_DB_PASSWORD=%q\n' "${FIVEM_DB_PASSWORD:-}"
+        printf 'FIVEM_DB_NAME=%q\n' "${FIVEM_DB_NAME:-}"
+        printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
+        printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
+        printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
     } > "$FIVEM_INFO_PUBLIC_FILE"
     chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
 }
@@ -291,9 +349,6 @@ set_login_banner() {
 # >>> kumahost-fivem-info >>>
 if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
     . /etc/fivem-server-info-public
-    if [ -r /etc/fivem-server-info ]; then
-        . /etc/fivem-server-info
-    fi
     if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
         _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
     else
@@ -308,6 +363,7 @@ if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
     printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
     printf 'Server Data: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DATA_PATH:-/home/FiveM/server-data}"
     if [ -n "${FIVEM_DB_USER:-}" ] || [ -n "${FIVEM_DB_NAME:-}" ] || [ -n "${FIVEM_DB_CONN:-}" ]; then
+        printf 'DB Host: \033[1;36m%s:%s\033[0m\n' "${FIVEM_DB_HOST:-127.0.0.1}" "${FIVEM_DB_PORT:-3306}"
         printf 'DB User: \033[1;36m%s\033[0m\n' "${FIVEM_DB_USER:-unknown}"
         printf 'DB Password: \033[1;31m%s\033[0m\n' "${FIVEM_DB_PASSWORD:-unknown}"
         printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
@@ -363,8 +419,39 @@ populate_db_fields_from_conn() {
     if [[ "$conn" =~ ^mysql://([^:]+):([^@]+)@([^/:?]+)(:([0-9]+))?/([^?]+) ]]; then
         FIVEM_DB_USER="${FIVEM_DB_USER:-${BASH_REMATCH[1]}}"
         FIVEM_DB_PASSWORD="${FIVEM_DB_PASSWORD:-${BASH_REMATCH[2]}}"
+        FIVEM_DB_HOST="${FIVEM_DB_HOST:-${BASH_REMATCH[3]}}"
+        FIVEM_DB_PORT="${FIVEM_DB_PORT:-${BASH_REMATCH[5]:-3306}}"
         FIVEM_DB_NAME="${FIVEM_DB_NAME:-${BASH_REMATCH[6]}}"
     fi
+}
+
+ensure_mysql_credentials() {
+    if [[ "$FIVEM_MYSQL_AUTO_SETUP" != "1" ]]; then
+        return 0
+    fi
+
+    ensure_mysql_installed_and_running
+
+    if [[ -z "${FIVEM_DB_NAME:-}" ]]; then
+        FIVEM_DB_NAME="fivem_$(random_token 8 | tr '[:upper:]' '[:lower:]')"
+    fi
+    if [[ -z "${FIVEM_DB_USER:-}" ]]; then
+        FIVEM_DB_USER="fivem_$(random_token 8 | tr '[:upper:]' '[:lower:]')"
+    fi
+    if [[ -z "${FIVEM_DB_PASSWORD:-}" ]]; then
+        FIVEM_DB_PASSWORD="$(random_token 24)"
+    fi
+
+    mysql_exec "CREATE DATABASE IF NOT EXISTS \`${FIVEM_DB_NAME}\`;"
+    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
+    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
+    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
+    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
+    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'localhost';"
+    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'127.0.0.1';"
+    mysql_exec "FLUSH PRIVILEGES;"
+
+    FIVEM_DB_CONN="mysql://${FIVEM_DB_USER}:${FIVEM_DB_PASSWORD}@${FIVEM_DB_HOST:-127.0.0.1}:${FIVEM_DB_PORT:-3306}/${FIVEM_DB_NAME}?charset=utf8mb4"
 }
 
 print_summary() {
@@ -385,6 +472,7 @@ print_summary() {
     log "Server data path: ${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
     if [[ -n "${FIVEM_DB_USER:-}" || -n "${FIVEM_DB_NAME:-}" || -n "${FIVEM_DB_CONN:-}" ]]; then
         log "Database credentials detected:"
+        log "  Host: ${FIVEM_DB_HOST:-127.0.0.1}:${FIVEM_DB_PORT:-3306}"
         log "  User: ${FIVEM_DB_USER:-unknown}"
         log "  Password: ${FIVEM_DB_PASSWORD:-unknown}"
         log "  Database: ${FIVEM_DB_NAME:-unknown}"
@@ -451,6 +539,7 @@ main() {
 
     extract_runtime_details "$FIVEM_INSTALL_LOG"
     populate_db_fields_from_conn
+    ensure_mysql_credentials
 
     write_info_file
     set_login_banner
