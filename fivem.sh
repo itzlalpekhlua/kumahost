@@ -15,6 +15,7 @@ FIVEM_INFO_FILE="${FIVEM_INFO_FILE:-/etc/fivem-server-info}"
 FIVEM_INFO_PUBLIC_FILE="${FIVEM_INFO_PUBLIC_FILE:-/etc/fivem-server-info-public}"
 FIVEM_BASH_MARKER_START="# >>> kumahost-fivem-info >>>"
 FIVEM_BASH_MARKER_END="# <<< kumahost-fivem-info <<<"
+FIVEM_PROFILED_SCRIPT="${FIVEM_PROFILED_SCRIPT:-/etc/profile.d/kumahost-fivem-info.sh}"
 FIVEM_INSTALL_LOG="/var/log/kumahost-fivem-install.log"
 FIVEM_PIN=""
 FIVEM_TXADMIN_URL=""
@@ -347,7 +348,15 @@ set_login_banner() {
     cat >> "$bashrc" <<'EOF'
 
 # >>> kumahost-fivem-info >>>
-if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
+case "$-" in
+  *i*) ;;
+  *) return 0 2>/dev/null || exit 0 ;;
+esac
+if [ -n "${KUMAHOST_FIVEM_BANNER_SHOWN:-}" ]; then
+    return 0 2>/dev/null || true
+fi
+if [ -r /etc/fivem-server-info-public ]; then
+    KUMAHOST_FIVEM_BANNER_SHOWN=1
     . /etc/fivem-server-info-public
     if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
         _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
@@ -373,6 +382,44 @@ if [ -n "$PS1" ] && [ -r /etc/fivem-server-info-public ]; then
 fi
 # <<< kumahost-fivem-info <<<
 EOF
+
+    # Also install profile.d hook so banner appears on login shells even when bashrc path is skipped.
+    cat > "$FIVEM_PROFILED_SCRIPT" <<'EOF'
+#!/usr/bin/env sh
+case "$-" in
+  *i*) ;;
+  *) return 0 2>/dev/null || exit 0 ;;
+esac
+if [ -n "${KUMAHOST_FIVEM_BANNER_SHOWN:-}" ]; then
+  return 0 2>/dev/null || exit 0
+fi
+if [ -r /etc/fivem-server-info-public ]; then
+  KUMAHOST_FIVEM_BANNER_SHOWN=1
+  . /etc/fivem-server-info-public
+  if [ "${FIVEM_TXADMIN_ENABLED:-yes}" = "yes" ]; then
+    _fivem_txadmin_display="${FIVEM_TXADMIN_URL:-http://${FIVEM_SERVER_IP:-unknown}:${FIVEM_TXADMIN_PORT:-40120}}"
+  else
+    _fivem_txadmin_display="disabled"
+  fi
+  printf '\n\033[1;32mKumaHost FiveM Server Ready\033[0m\n'
+  printf 'IP: \033[1;36m%s\033[0m\n' "${FIVEM_SERVER_IP:-unknown}"
+  printf 'txAdmin: \033[1;33m%s\033[0m\n' "${_fivem_txadmin_display}"
+  printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
+  printf 'Note: \033[0;37m%s\033[0m\n' "${FIVEM_PIN_NOTE:-PIN may expire quickly}"
+  printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
+  printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
+  printf 'Server Data: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DATA_PATH:-/home/FiveM/server-data}"
+  if [ -n "${FIVEM_DB_USER:-}" ] || [ -n "${FIVEM_DB_NAME:-}" ] || [ -n "${FIVEM_DB_CONN:-}" ]; then
+    printf 'DB Host: \033[1;36m%s:%s\033[0m\n' "${FIVEM_DB_HOST:-127.0.0.1}" "${FIVEM_DB_PORT:-3306}"
+    printf 'DB User: \033[1;36m%s\033[0m\n' "${FIVEM_DB_USER:-unknown}"
+    printf 'DB Password: \033[1;31m%s\033[0m\n' "${FIVEM_DB_PASSWORD:-unknown}"
+    printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
+    printf 'DB Conn: \033[1;33m%s\033[0m\n' "${FIVEM_DB_CONN:-unknown}"
+  fi
+  printf 'Scripts: \033[1;35mstart.sh stop.sh attach.sh\033[0m\n\n'
+fi
+EOF
+    chmod 755 "$FIVEM_PROFILED_SCRIPT"
 }
 
 extract_runtime_details() {
