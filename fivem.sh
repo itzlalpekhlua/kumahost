@@ -29,6 +29,7 @@ FIVEM_TMUX_SESSION="${FIVEM_TMUX_SESSION:-kumahost-fivem-install}"
 FIVEM_IN_TMUX="${FIVEM_IN_TMUX:-0}"
 FIVEM_TMUX_KEEP_OPEN="${FIVEM_TMUX_KEEP_OPEN:-1}"
 FIVEM_QGA_AUTO_DETECT="${FIVEM_QGA_AUTO_DETECT:-1}"
+FIVEM_STAGED_SCRIPT_PATH="${FIVEM_STAGED_SCRIPT_PATH:-/tmp/kumahost-fivem-auto-installer.sh}"
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*"
@@ -87,6 +88,39 @@ is_qga_context() {
     [[ "$pcomm" == "qemu-ga" || "$pcomm" == "qemu-guest-agent" ]]
 }
 
+resolve_reexec_script_path() {
+    local source_path="${BASH_SOURCE[0]:-$0}"
+    local abs_path="$source_path"
+
+    if [[ "$abs_path" != /* ]]; then
+        abs_path="$(pwd)/$abs_path"
+    fi
+
+    # If already a normal file, use it directly.
+    if [[ -f "$abs_path" && "$abs_path" != /dev/fd/* && "$abs_path" != /proc/*/fd/* ]]; then
+        printf '%s' "$abs_path"
+        return 0
+    fi
+
+    # One-click/piped execution often comes from /dev/fd/*.
+    # Stage current script content to a stable file so tmux can re-exec it.
+    if [[ -r "$source_path" ]]; then
+        cat "$source_path" > "$FIVEM_STAGED_SCRIPT_PATH"
+        chmod +x "$FIVEM_STAGED_SCRIPT_PATH"
+        printf '%s' "$FIVEM_STAGED_SCRIPT_PATH"
+        return 0
+    fi
+
+    if [[ -r "$abs_path" ]]; then
+        cat "$abs_path" > "$FIVEM_STAGED_SCRIPT_PATH"
+        chmod +x "$FIVEM_STAGED_SCRIPT_PATH"
+        printf '%s' "$FIVEM_STAGED_SCRIPT_PATH"
+        return 0
+    fi
+
+    return 1
+}
+
 run_in_tmux_if_needed() {
     if [[ "$FIVEM_TMUX_ENABLED" != "1" ]]; then
         return 0
@@ -97,9 +131,11 @@ run_in_tmux_if_needed() {
 
     ensure_tmux_installed
 
-    local script_path="$0"
-    if [[ "$script_path" != /* ]]; then
-        script_path="$(pwd)/$script_path"
+    local script_path=""
+    if ! script_path="$(resolve_reexec_script_path)"; then
+        log "Cannot resolve script file path for tmux re-exec (detected: ${BASH_SOURCE[0]:-$0})."
+        log "Continuing in current shell."
+        return 0
     fi
 
     local keep_open="$FIVEM_TMUX_KEEP_OPEN"
