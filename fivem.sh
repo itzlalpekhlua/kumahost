@@ -27,6 +27,8 @@ DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
 FIVEM_TMUX_ENABLED="${FIVEM_TMUX_ENABLED:-1}"
 FIVEM_TMUX_SESSION="${FIVEM_TMUX_SESSION:-kumahost-fivem-install}"
 FIVEM_IN_TMUX="${FIVEM_IN_TMUX:-0}"
+FIVEM_TMUX_KEEP_OPEN="${FIVEM_TMUX_KEEP_OPEN:-1}"
+FIVEM_QGA_AUTO_DETECT="${FIVEM_QGA_AUTO_DETECT:-1}"
 
 log() {
     printf '[%s] %s\n' "$(date -u +'%Y-%m-%d %H:%M:%S UTC')" "$*"
@@ -71,6 +73,20 @@ ensure_tmux_installed() {
     fi
 }
 
+is_qga_context() {
+    if [[ "$FIVEM_QGA_AUTO_DETECT" != "1" ]]; then
+        return 1
+    fi
+
+    if [[ -t 0 || -t 1 ]]; then
+        return 1
+    fi
+
+    local pcomm=""
+    pcomm="$(cat "/proc/${PPID}/comm" 2>/dev/null || true)"
+    [[ "$pcomm" == "qemu-ga" || "$pcomm" == "qemu-guest-agent" ]]
+}
+
 run_in_tmux_if_needed() {
     if [[ "$FIVEM_TMUX_ENABLED" != "1" ]]; then
         return 0
@@ -86,9 +102,16 @@ run_in_tmux_if_needed() {
         script_path="$(pwd)/$script_path"
     fi
 
-    local tmux_cmd
-    printf -v tmux_cmd \
-        'FIVEM_IN_TMUX=1 SETUP_URL=%q FIVEM_VERSION=%q FIVEM_ENABLE_CRONTAB=%q FIVEM_KILL_PORT=%q FIVEM_DELETE_DIR=%q FIVEM_NO_TXADMIN=%q FIVEM_DIR=%q FIVEM_INFO_FILE=%q DOWNLOAD_TIMEOUT_SECONDS=%q DOWNLOAD_RETRIES=%q FIVEM_TMUX_ENABLED=1 FIVEM_TMUX_SESSION=%q bash %q' \
+    local keep_open="$FIVEM_TMUX_KEEP_OPEN"
+    if is_qga_context; then
+        # In guest-agent runs, do not keep the session waiting for Enter.
+        keep_open="0"
+        log "QEMU guest-agent context detected; tmux session will auto-close after completion."
+    fi
+
+    local tmux_inner_cmd
+    printf -v tmux_inner_cmd \
+        'FIVEM_IN_TMUX=1 SETUP_URL=%q FIVEM_VERSION=%q FIVEM_ENABLE_CRONTAB=%q FIVEM_KILL_PORT=%q FIVEM_DELETE_DIR=%q FIVEM_NO_TXADMIN=%q FIVEM_DIR=%q FIVEM_INFO_FILE=%q DOWNLOAD_TIMEOUT_SECONDS=%q DOWNLOAD_RETRIES=%q FIVEM_TMUX_ENABLED=1 FIVEM_TMUX_SESSION=%q FIVEM_TMUX_KEEP_OPEN=%q FIVEM_QGA_AUTO_DETECT=%q bash %q' \
         "$SETUP_URL" \
         "$FIVEM_VERSION" \
         "$FIVEM_ENABLE_CRONTAB" \
@@ -100,17 +123,31 @@ run_in_tmux_if_needed() {
         "$DOWNLOAD_TIMEOUT_SECONDS" \
         "$DOWNLOAD_RETRIES" \
         "$FIVEM_TMUX_SESSION" \
+        "$keep_open" \
+        "$FIVEM_QGA_AUTO_DETECT" \
         "$script_path"
+
+    local tmux_cmd
+    if [[ "$keep_open" == "1" ]]; then
+        printf -v tmux_cmd \
+            'bash -lc %q' \
+            "${tmux_inner_cmd}; code=\$?; echo; echo '[KumaHost] Installer exited with code '\$code; echo '[KumaHost] Press Enter to close this tmux session.'; read -r _; exit \$code"
+    else
+        printf -v tmux_cmd 'bash -lc %q' "$tmux_inner_cmd"
+    fi
 
     if tmux has-session -t "$FIVEM_TMUX_SESSION" 2>/dev/null; then
         log "A tmux install session already exists: $FIVEM_TMUX_SESSION"
         log "Attach with: tmux attach -t $FIVEM_TMUX_SESSION"
+        log "If you ran installer as root, attach as root: sudo tmux attach -t $FIVEM_TMUX_SESSION"
         exit 0
     fi
 
     tmux new-session -d -s "$FIVEM_TMUX_SESSION" "$tmux_cmd"
     log "Installer started in tmux session: $FIVEM_TMUX_SESSION"
     log "Attach with: tmux attach -t $FIVEM_TMUX_SESSION"
+    log "If you ran installer as root, attach as root: sudo tmux attach -t $FIVEM_TMUX_SESSION"
+    log "Install log: $FIVEM_INSTALL_LOG"
     log "To run in foreground next time: FIVEM_TMUX_ENABLED=0 bash $script_path"
     exit 0
 }
