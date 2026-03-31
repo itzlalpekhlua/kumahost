@@ -55,8 +55,14 @@ ensure_tmux_installed() {
 
     if command -v apt-get >/dev/null 2>&1; then
         export DEBIAN_FRONTEND=noninteractive
-        apt-get update -y
-        apt-get install -y tmux
+        local attempt
+        for attempt in 1 2 3 4 5; do
+            if apt-get update && apt-get install -y tmux; then
+                break
+            fi
+            log "tmux install attempt ${attempt}/5 failed (apt). Retrying in 5s..."
+            sleep 5
+        done
     elif command -v dnf >/dev/null 2>&1; then
         dnf install -y tmux
     elif command -v yum >/dev/null 2>&1; then
@@ -370,6 +376,7 @@ main() {
 
     command -v curl >/dev/null 2>&1 || fail "curl is required."
     command -v bash >/dev/null 2>&1 || fail "bash is required."
+    ensure_tmux_installed
     run_in_tmux_if_needed
 
     local args=(
