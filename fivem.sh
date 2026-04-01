@@ -26,6 +26,9 @@ FIVEM_DB_NAME=""
 FIVEM_DB_CONN=""
 FIVEM_DB_HOST="${FIVEM_DB_HOST:-127.0.0.1}"
 FIVEM_DB_PORT="${FIVEM_DB_PORT:-3306}"
+FIVEM_MYSQL_ROOT_USER="${FIVEM_MYSQL_ROOT_USER:-root}"
+FIVEM_MYSQL_ROOT_PASS="${FIVEM_MYSQL_ROOT_PASS:-}"
+FIVEM_MYSQL_ROOT_AUTH="${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
 FIVEM_MYSQL_AUTO_SETUP="${FIVEM_MYSQL_AUTO_SETUP:-1}"
 DOWNLOAD_TIMEOUT_SECONDS="${DOWNLOAD_TIMEOUT_SECONDS:-20}"
 DOWNLOAD_RETRIES="${DOWNLOAD_RETRIES:-3}"
@@ -130,6 +133,30 @@ mysql_exec() {
 
 random_token() {
     tr -dc 'A-Za-z0-9' </dev/urandom | head -c "${1:-24}"
+}
+
+populate_mysql_root_credentials() {
+    local plugin=""
+    plugin="$(mysql_exec "SELECT plugin FROM mysql.user WHERE user='${FIVEM_MYSQL_ROOT_USER}' AND host='localhost' LIMIT 1;" 2>/dev/null | head -n1 || true)"
+    if [[ -n "$plugin" ]]; then
+        FIVEM_MYSQL_ROOT_AUTH="$plugin"
+    fi
+
+    case "${FIVEM_MYSQL_ROOT_AUTH:-}" in
+        unix_socket|auth_socket)
+            FIVEM_MYSQL_ROOT_PASS="(none - socket auth)"
+            ;;
+        mysql_native_password|caching_sha2_password)
+            if [[ -z "${FIVEM_MYSQL_ROOT_PASS:-}" ]]; then
+                FIVEM_MYSQL_ROOT_PASS="(configured but not readable)"
+            fi
+            ;;
+        *)
+            if [[ -z "${FIVEM_MYSQL_ROOT_PASS:-}" ]]; then
+                FIVEM_MYSQL_ROOT_PASS="(unknown)"
+            fi
+            ;;
+    esac
 }
 
 is_qga_context() {
@@ -307,6 +334,9 @@ write_info_file() {
         printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
         printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
         printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+        printf 'FIVEM_MYSQL_ROOT_USER=%q\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+        printf 'FIVEM_MYSQL_ROOT_PASS=%q\n' "${FIVEM_MYSQL_ROOT_PASS:-}"
+        printf 'FIVEM_MYSQL_ROOT_AUTH=%q\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
     } > "$FIVEM_INFO_FILE"
     chmod 600 "$FIVEM_INFO_FILE"
 
@@ -329,6 +359,9 @@ write_info_file() {
         printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
         printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
         printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+        printf 'FIVEM_MYSQL_ROOT_USER=%q\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+        printf 'FIVEM_MYSQL_ROOT_PASS=%q\n' "${FIVEM_MYSQL_ROOT_PASS:-}"
+        printf 'FIVEM_MYSQL_ROOT_AUTH=%q\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
     } > "$FIVEM_INFO_PUBLIC_FILE"
     chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
 }
@@ -359,6 +392,9 @@ bootstrap_banner_files() {
             printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
             printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
             printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+            printf 'FIVEM_MYSQL_ROOT_USER=%q\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+            printf 'FIVEM_MYSQL_ROOT_PASS=%q\n' "${FIVEM_MYSQL_ROOT_PASS:-}"
+            printf 'FIVEM_MYSQL_ROOT_AUTH=%q\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
         } > "$FIVEM_INFO_FILE"
         chmod 600 "$FIVEM_INFO_FILE"
     fi
@@ -381,6 +417,9 @@ bootstrap_banner_files() {
             printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
             printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
             printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+            printf 'FIVEM_MYSQL_ROOT_USER=%q\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+            printf 'FIVEM_MYSQL_ROOT_PASS=%q\n' "${FIVEM_MYSQL_ROOT_PASS:-}"
+            printf 'FIVEM_MYSQL_ROOT_AUTH=%q\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
         } > "$FIVEM_INFO_PUBLIC_FILE"
         chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
     fi
@@ -421,7 +460,11 @@ if [ -r /etc/fivem-server-info-public ]; then
     printf '\n\033[1;32mKumaHost FiveM Server Ready\033[0m\n'
     printf 'IP: \033[1;36m%s\033[0m\n' "${FIVEM_SERVER_IP:-unknown}"
     printf 'txAdmin: \033[1;33m%s\033[0m\n' "${_fivem_txadmin_display}"
-    printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
+    if [ "${FIVEM_PIN:-unknown}" = "unknown" ]; then
+        printf 'PIN: \033[1;31munknown\033[0m (\033[1;33mwait 1-2 mins and reconnect VPS\033[0m)\n'
+    else
+        printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
+    fi
     printf 'Note: \033[0;37m%s\033[0m\n' "${FIVEM_PIN_NOTE:-PIN may expire quickly}"
     printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
     printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
@@ -433,6 +476,9 @@ if [ -r /etc/fivem-server-info-public ]; then
         printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
         printf 'DB Conn: \033[1;33m%s\033[0m\n' "${FIVEM_DB_CONN:-unknown}"
     fi
+    printf 'MySQL Root User: \033[1;36m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+    printf 'MySQL Root Auth: \033[1;36m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
+    printf 'MySQL Root Pass: \033[1;31m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_PASS:-unknown}"
     printf 'Scripts: \033[1;35mstart.sh stop.sh attach.sh\033[0m\n\n'
 fi
 # <<< kumahost-fivem-info <<<
@@ -459,7 +505,11 @@ if [ -r /etc/fivem-server-info-public ]; then
   printf '\n\033[1;32mKumaHost FiveM Server Ready\033[0m\n'
   printf 'IP: \033[1;36m%s\033[0m\n' "${FIVEM_SERVER_IP:-unknown}"
   printf 'txAdmin: \033[1;33m%s\033[0m\n' "${_fivem_txadmin_display}"
-  printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
+  if [ "${FIVEM_PIN:-unknown}" = "unknown" ]; then
+    printf 'PIN: \033[1;31munknown\033[0m (\033[1;33mwait 1-2 mins and reconnect VPS\033[0m)\n'
+  else
+    printf 'PIN: \033[1;31m%s\033[0m\n' "${FIVEM_PIN:-unknown}"
+  fi
   printf 'Note: \033[0;37m%s\033[0m\n' "${FIVEM_PIN_NOTE:-PIN may expire quickly}"
   printf 'Game Port: \033[1;36m%s\033[0m (TCP/UDP)\n' "${FIVEM_GAME_PORT:-30120}"
   printf 'Directory: \033[1;34m%s\033[0m\n' "${FIVEM_SERVER_DIR:-/home/FiveM}"
@@ -471,6 +521,9 @@ if [ -r /etc/fivem-server-info-public ]; then
     printf 'DB Name: \033[1;36m%s\033[0m\n' "${FIVEM_DB_NAME:-unknown}"
     printf 'DB Conn: \033[1;33m%s\033[0m\n' "${FIVEM_DB_CONN:-unknown}"
   fi
+  printf 'MySQL Root User: \033[1;36m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_USER:-root}"
+  printf 'MySQL Root Auth: \033[1;36m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
+  printf 'MySQL Root Pass: \033[1;31m%s\033[0m\n' "${FIVEM_MYSQL_ROOT_PASS:-unknown}"
   printf 'Scripts: \033[1;35mstart.sh stop.sh attach.sh\033[0m\n\n'
 fi
 EOF
@@ -578,7 +631,11 @@ print_summary() {
     log "Mode: ${mode}"
     log "Server directory: ${FIVEM_DIR}"
     log "txAdmin URL: ${txadmin_url}"
-    log "PIN: ${FIVEM_PIN:-unknown}"
+    if [[ "${FIVEM_PIN:-unknown}" == "unknown" ]]; then
+        log "PIN: unknown (wait 1-2 mins and reconnect to VPS)"
+    else
+        log "PIN: ${FIVEM_PIN:-unknown}"
+    fi
     log "Game endpoint: ${ip}:30120 (TCP/UDP)"
     log "Server data path: ${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
     if [[ -n "${FIVEM_DB_USER:-}" || -n "${FIVEM_DB_NAME:-}" || -n "${FIVEM_DB_CONN:-}" ]]; then
@@ -593,6 +650,10 @@ print_summary() {
     else
         log "No MySQL connection detected from installer output."
     fi
+    log "MySQL root:"
+    log "  User: ${FIVEM_MYSQL_ROOT_USER:-root}"
+    log "  Auth: ${FIVEM_MYSQL_ROOT_AUTH:-unknown}"
+    log "  Pass: ${FIVEM_MYSQL_ROOT_PASS:-unknown}"
     log "Helper scripts:"
     log "  Start: ${FIVEM_DIR}/start.sh"
     log "  Stop: ${FIVEM_DIR}/stop.sh"
@@ -612,9 +673,11 @@ main() {
     fi
     ensure_tmux_installed
     ensure_mysql_installed_and_running
+    populate_mysql_root_credentials
     if ! ensure_mysql_credentials; then
         log "WARNING: Initial MySQL credential setup failed; installer will continue."
     fi
+    populate_mysql_root_credentials
     bootstrap_banner_files
     run_in_tmux_if_needed
 
@@ -658,6 +721,7 @@ main() {
     if ! ensure_mysql_credentials; then
         log "WARNING: MySQL credential setup failed; continuing without DB credentials."
     fi
+    populate_mysql_root_credentials
 
     write_info_file
     set_login_banner
