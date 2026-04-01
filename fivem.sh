@@ -333,6 +333,61 @@ write_info_file() {
     chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
 }
 
+bootstrap_banner_files() {
+    local ip txadmin_enabled
+    ip="$(detect_public_ip)"
+    txadmin_enabled="yes"
+    if [[ "$FIVEM_NO_TXADMIN" == "1" ]]; then
+        txadmin_enabled="no"
+    fi
+
+    if [[ ! -f "$FIVEM_INFO_FILE" ]]; then
+        umask 077
+        {
+            printf 'FIVEM_SERVER_IP=%q\n' "$ip"
+            printf 'FIVEM_SERVER_DIR=%q\n' "$FIVEM_DIR"
+            printf 'FIVEM_TXADMIN_PORT=%q\n' "40120"
+            printf 'FIVEM_GAME_PORT=%q\n' "30120"
+            printf 'FIVEM_TXADMIN_ENABLED=%q\n' "$txadmin_enabled"
+            printf 'FIVEM_TXADMIN_URL=%q\n' "${FIVEM_TXADMIN_URL:-}"
+            printf 'FIVEM_PIN=%q\n' "${FIVEM_PIN:-unknown}"
+            printf 'FIVEM_PIN_NOTE=%q\n' "PIN is short-lived and may expire quickly after install."
+            printf 'FIVEM_SERVER_DATA_PATH=%q\n' "${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
+            printf 'FIVEM_DB_USER=%q\n' "${FIVEM_DB_USER:-}"
+            printf 'FIVEM_DB_PASSWORD=%q\n' "${FIVEM_DB_PASSWORD:-}"
+            printf 'FIVEM_DB_NAME=%q\n' "${FIVEM_DB_NAME:-}"
+            printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
+            printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
+            printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+        } > "$FIVEM_INFO_FILE"
+        chmod 600 "$FIVEM_INFO_FILE"
+    fi
+
+    if [[ ! -f "$FIVEM_INFO_PUBLIC_FILE" ]]; then
+        umask 022
+        {
+            printf 'FIVEM_SERVER_IP=%q\n' "$ip"
+            printf 'FIVEM_SERVER_DIR=%q\n' "$FIVEM_DIR"
+            printf 'FIVEM_TXADMIN_PORT=%q\n' "40120"
+            printf 'FIVEM_GAME_PORT=%q\n' "30120"
+            printf 'FIVEM_TXADMIN_ENABLED=%q\n' "$txadmin_enabled"
+            printf 'FIVEM_TXADMIN_URL=%q\n' "${FIVEM_TXADMIN_URL:-}"
+            printf 'FIVEM_PIN=%q\n' "${FIVEM_PIN:-unknown}"
+            printf 'FIVEM_PIN_NOTE=%q\n' "PIN is short-lived and may expire quickly after install."
+            printf 'FIVEM_SERVER_DATA_PATH=%q\n' "${FIVEM_SERVER_DATA_PATH:-${FIVEM_DIR}/server-data}"
+            printf 'FIVEM_DB_USER=%q\n' "${FIVEM_DB_USER:-}"
+            printf 'FIVEM_DB_PASSWORD=%q\n' "${FIVEM_DB_PASSWORD:-}"
+            printf 'FIVEM_DB_NAME=%q\n' "${FIVEM_DB_NAME:-}"
+            printf 'FIVEM_DB_HOST=%q\n' "${FIVEM_DB_HOST:-127.0.0.1}"
+            printf 'FIVEM_DB_PORT=%q\n' "${FIVEM_DB_PORT:-3306}"
+            printf 'FIVEM_DB_CONN=%q\n' "${FIVEM_DB_CONN:-}"
+        } > "$FIVEM_INFO_PUBLIC_FILE"
+        chmod 644 "$FIVEM_INFO_PUBLIC_FILE"
+    fi
+
+    set_login_banner
+}
+
 set_login_banner() {
     local bashrc="/etc/bash.bashrc"
     if [[ ! -f "$bashrc" && -f /etc/bashrc ]]; then
@@ -546,6 +601,7 @@ main() {
         export TERM="$FIVEM_TERM_DEFAULT"
         log "TERM was missing/dumb; set TERM=${TERM} for non-interactive installer compatibility."
     fi
+    bootstrap_banner_files
     ensure_tmux_installed
     run_in_tmux_if_needed
 
