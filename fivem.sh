@@ -491,10 +491,10 @@ extract_runtime_details() {
     path_line="$(printf '%s\n' "$clean" | grep -E 'Server-Data Path:' | tail -n1 || true)"
 
     if [[ -n "$tx_line" ]]; then
-        FIVEM_TXADMIN_URL="$(printf '%s' "$tx_line" | sed -E 's/.*TxAdmin Webinterface:[[:space:]]*//')"
+        FIVEM_TXADMIN_URL="$(printf '%s' "$tx_line" | sed -nE 's#.*(https?://[^[:space:]]+).*#\1#p' | head -n1)"
     fi
     if [[ -n "$pin_line" ]]; then
-        FIVEM_PIN="$(printf '%s' "$pin_line" | sed -E 's/.*Pin:[[:space:]]*//')"
+        FIVEM_PIN="$(printf '%s' "$pin_line" | grep -oE '[0-9]{4,8}' | head -n1 || true)"
     fi
     if [[ -n "$path_line" ]]; then
         FIVEM_SERVER_DATA_PATH="$(printf '%s' "$path_line" | sed -E 's/.*Server-Data Path:[[:space:]]*//')"
@@ -512,6 +512,15 @@ extract_runtime_details() {
     FIVEM_TXADMIN_URL="${FIVEM_TXADMIN_URL//$'\r'/}"
     FIVEM_PIN="${FIVEM_PIN//$'\r'/}"
     FIVEM_SERVER_DATA_PATH="${FIVEM_SERVER_DATA_PATH//$'\r'/}"
+
+    # Fallback: some installers print raw numeric PIN on its own line.
+    if [[ -z "${FIVEM_PIN:-}" || "${FIVEM_PIN:-}" == "unknown" ]]; then
+        local pin_fallback
+        pin_fallback="$(printf '%s\n' "$clean" | grep -E '^[[:space:]]*[0-9]{4,8}[[:space:]]*$' | tail -n1 | tr -d '[:space:]' || true)"
+        if [[ -n "$pin_fallback" ]]; then
+            FIVEM_PIN="$pin_fallback"
+        fi
+    fi
 }
 
 populate_db_fields_from_conn() {
@@ -544,14 +553,14 @@ ensure_mysql_credentials() {
         FIVEM_DB_PASSWORD="$(random_token 24)"
     fi
 
-    mysql_exec "CREATE DATABASE IF NOT EXISTS \`${FIVEM_DB_NAME}\`;"
-    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
-    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
-    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
-    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';"
-    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'localhost';"
-    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'127.0.0.1';"
-    mysql_exec "FLUSH PRIVILEGES;"
+    mysql_exec "CREATE DATABASE IF NOT EXISTS \`${FIVEM_DB_NAME}\`;" || return 1
+    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';" || return 1
+    mysql_exec "CREATE USER IF NOT EXISTS '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';" || return 1
+    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'localhost' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';" || true
+    mysql_exec "ALTER USER '${FIVEM_DB_USER}'@'127.0.0.1' IDENTIFIED BY '${FIVEM_DB_PASSWORD}';" || true
+    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'localhost';" || return 1
+    mysql_exec "GRANT ALL PRIVILEGES ON \`${FIVEM_DB_NAME}\`.* TO '${FIVEM_DB_USER}'@'127.0.0.1';" || return 1
+    mysql_exec "FLUSH PRIVILEGES;" || true
 
     FIVEM_DB_CONN="mysql://${FIVEM_DB_USER}:${FIVEM_DB_PASSWORD}@${FIVEM_DB_HOST:-127.0.0.1}:${FIVEM_DB_PORT:-3306}/${FIVEM_DB_NAME}?charset=utf8mb4"
 }
@@ -601,8 +610,12 @@ main() {
         export TERM="$FIVEM_TERM_DEFAULT"
         log "TERM was missing/dumb; set TERM=${TERM} for non-interactive installer compatibility."
     fi
-    bootstrap_banner_files
     ensure_tmux_installed
+    ensure_mysql_installed_and_running
+    if ! ensure_mysql_credentials; then
+        log "WARNING: Initial MySQL credential setup failed; installer will continue."
+    fi
+    bootstrap_banner_files
     run_in_tmux_if_needed
 
     local args=(
@@ -642,7 +655,9 @@ main() {
 
     extract_runtime_details "$FIVEM_INSTALL_LOG"
     populate_db_fields_from_conn
-    ensure_mysql_credentials
+    if ! ensure_mysql_credentials; then
+        log "WARNING: MySQL credential setup failed; continuing without DB credentials."
+    fi
 
     write_info_file
     set_login_banner
